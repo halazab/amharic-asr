@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  amharic-asr:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../models:/app/models
+      - ../checkpoints:/app/checkpoints
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - AMHARIC_ASR_MODEL_PATH=/app/models/amharic_asr_int8.onnx
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Training service (separate)
+  trainer:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    volumes:
+      - ../checkpoints:/app/checkpoints
+      - ../models:/app/models
+      - kaggle_cache:/root/.kaggle
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command: python3.10 scripts/train.py --config configs/training.json
+    profiles:
+      - training
+
+volumes:
+  kaggle_cache:
+    driver: local

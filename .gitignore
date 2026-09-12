@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.env
+*.egg-info/
+dist/
+build/
+checkpoints/
+*.pt
+*.pth
+.DS_Store
