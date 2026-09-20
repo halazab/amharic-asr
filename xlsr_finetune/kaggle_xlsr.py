@@ -17,6 +17,17 @@ import sys
 WORK = "/kaggle/working"
 CODE_ROOT = "/kaggle/input/amharic-xlsr-code"
 
+# SMOKE: flip to a short, tiny run purely to validate the end-to-end save+push of
+# the ~1.2GB weight bundle to the state dataset. Set False for production.
+SMOKE = False
+if SMOKE:
+    os.environ["AMH_TIME_BUDGET"] = "150"
+    os.environ["AMH_MAX_TRAIN"] = "64"
+    os.environ["AMH_MAX_EVAL"] = "32"
+    os.environ["AMH_BS"] = "4"
+    os.environ["AMH_GRAD_ACCUM"] = "1"
+    os.environ["AMH_SAVE_STEPS"] = "1000"   # only the final save_model matters now
+
 
 def _sh(*cmd, check=True):
     print("[kaggle] $", " ".join(cmd))
