@@ -74,7 +74,7 @@ def main(settings: Settings | None = None) -> None:
     print(f"[train] loading {settings.model_name} vocab_size={vocab_size}")
     model = Wav2Vec2ForCTC.from_pretrained(
         settings.model_name, vocab_size=vocab_size, pad_token_id=0,
-        ctc_loss_reduction="sum", ignore_index=0,
+        ctc_loss_reduction="sum",
     )
     if settings.freeze_feature_encoder:
         model.freeze_feature_encoder()
