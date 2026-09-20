@@ -74,10 +74,13 @@ def main(settings: Settings | None = None) -> None:
     # 4) model (resume from durable weights if present, else base XLS-R)
     load_from = resume_model_dir or settings.model_name
     print(f"[train] loading {load_from} vocab_size={vocab_size}")
-    model = Wav2Vec2ForCTC.from_pretrained(
-        load_from, vocab_size=vocab_size, pad_token_id=0,
-        ctc_loss_reduction="sum",
-    )
+    load_kwargs = dict(vocab_size=vocab_size, pad_token_id=0, ctc_loss_reduction="sum")
+    if resume_model_dir:
+        # this transformers build *raises* on a shape mismatch; a vocab change
+        # (e.g. corpus grew, or a prior smoke used a tiny subset) must only
+        # re-init the CTC head and keep the pretrained encoder/transformer.
+        load_kwargs["ignore_mismatched_sizes"] = True
+    model = Wav2Vec2ForCTC.from_pretrained(load_from, **load_kwargs)
     if settings.freeze_feature_encoder:
         model.freeze_feature_encoder()
     model.config.use_cache = False
