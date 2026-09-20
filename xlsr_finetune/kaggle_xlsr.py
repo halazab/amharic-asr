@@ -1,21 +1,21 @@
 # Kaggle kernel entrypoint for the XLS-R/CTC fine-tune path.
 # Runs ONE time-budgeted session, then pushes resumable state to the state dataset.
 #
-# Why this shape (learned from the first two ERROR runs):
+# Why this shape (learned from the first three ERROR runs):
 #   * Kaggle's internet allowlist covers PyPI + HuggingFace but NOT github.com,
 #     so `git clone` from GitHub fails with "Could not resolve host". We ship the
-#     training code as a *mounted Kaggle dataset* (xlsr_code.zip) instead, which
-#     needs no internet. Internet is still ON because XLS-R-300M weights come
-#     from the HF Hub (allowlisted).
+#     training code as a *mounted Kaggle dataset* instead, which needs no
+#     internet. Kaggle auto-extracts a lone zip, so the package mounts directly
+#     at /kaggle/input/amharic-xlsr-code/xlsr_finetune/*.py. Internet is still ON
+#     because XLS-R-300M weights come from the HF Hub (allowlisted).
 #   * Kaggle already ships torch/transformers/datasets/librosa/soundfile/
 #     accelerate/evaluate, so we never force-reinstall pinned versions.
 import os
 import subprocess
 import sys
-import zipfile
 
 WORK = "/kaggle/working"
-CODE_ZIP = "/kaggle/input/amharic-xlsr-code/xlsr_code.zip"
+CODE_ROOT = "/kaggle/input/amharic-xlsr-code"
 
 
 def _sh(*cmd, check=True):
@@ -23,15 +23,11 @@ def _sh(*cmd, check=True):
     return subprocess.run(list(cmd), check=check)
 
 
-# --- 1. unpack the training package from the mounted code dataset ---
-extract = os.path.join(WORK, "src")
-os.makedirs(extract, exist_ok=True)
-with zipfile.ZipFile(CODE_ZIP) as z:
-    z.extractall(extract)
-pkg = os.path.join(extract, "xlsr_finetune")
-assert os.path.isdir(pkg), f"xlsr_finetune not found under {extract}"
-sys.path.insert(0, extract)
-print("[kaggle] code unpacked:", sorted(os.listdir(pkg)))
+# --- 1. import the training package straight from the mounted code dataset ---
+pkg = os.path.join(CODE_ROOT, "xlsr_finetune")
+assert os.path.isdir(pkg), f"xlsr_finetune not mounted under {CODE_ROOT}: {os.listdir(CODE_ROOT)}"
+sys.path.insert(0, CODE_ROOT)
+print("[kaggle] code mounted:", sorted(os.listdir(pkg)))
 
 # --- 2. install only genuinely-missing deps (never downgrade the base stack) ---
 _missing = []
