@@ -23,26 +23,32 @@ STATE_PROCESSOR_DIR = "processor"
 STATE_BUNDLE = "state.tar"       # single top-level file holding both dirs
 
 
-def pull_resume(state_mount: str, output_dir: str) -> str | None:
-    """Extract the durable weight bundle from the mounted state dataset into
-    output_dir. Returns the local model dir to load, or None for a fresh start.
+def _find_file(root: str, fname: str) -> str | None:
+    for dirpath, _dirs, files in os.walk(root):
+        if fname in files:
+            return dirpath
+    return None
 
-    We ship the weights as ONE top-level tarball (`state.tar`) because the
-    in-kernel `kaggle` CLI silently drops *nested directories* on `datasets
-    version` while uploading top-level files fine — a single file is the only
-    reliable large-payload shape.
+
+def pull_resume(state_mount: str, output_dir: str) -> str | None:
+    """Locate durable weights under the mounted state dataset and stage them at
+    output_dir/state for `from_pretrained`. Returns that model dir, or None.
+
+    Robust to every layout Kaggle has thrown at us: a raw top-level `state.tar`,
+    or a tar Kaggle auto-extracted into nested dirs (state/state + state/processor).
+    We just hunt for the dir containing `model.safetensors`.
     """
-    bundle = os.path.join(state_mount, STATE_BUNDLE)
     dst_model = os.path.join(output_dir, STATE_MODEL_DIR)
-    if os.path.isdir(bundle) or os.path.isdir(os.path.join(state_mount, STATE_MODEL_DIR)):
-        # legacy layout (dirs committed directly) — resume if weights present
-        src_model = os.path.join(state_mount, STATE_MODEL_DIR)
-        if os.path.isdir(src_model) and os.listdir(src_model) and not os.path.isdir(dst_model):
-            shutil.copytree(src_model, dst_model)
-    if not os.path.isfile(bundle):
-        print("[state] no durable weights in state dataset; fresh start")
+    if os.path.isfile(os.path.join(dst_model, "model.safetensors")):
+        print(f"[state] using already-staged weights {dst_model}")
+        return dst_model
+    if not os.path.isdir(state_mount):
+        print("[state] no state mount; fresh start")
         return None
-    if not os.path.isdir(dst_model) or not os.listdir(dst_model):
+
+    # raw tarball handed back intact -> extract it ourselves
+    bundle = os.path.join(state_mount, STATE_BUNDLE)
+    if os.path.isfile(bundle):
         os.makedirs(output_dir, exist_ok=True)
         import tarfile
         with tarfile.open(bundle, "r") as tar:
@@ -51,16 +57,33 @@ def pull_resume(state_mount: str, output_dir: str) -> str | None:
             except TypeError:  # older tarfile without filter kwarg
                 tar.extractall(output_dir)
         print(f"[state] extracted {bundle} -> {output_dir}")
-    if os.path.isdir(dst_model) and os.listdir(dst_model):
-        print(f"[state] resumed weights from {dst_model}")
-        return dst_model
-    print("[state] bundle present but no model dir after extract; fresh start")
-    return None
+
+    src_model = _find_file(state_mount, "model.safetensors") or _find_file(output_dir, "model.safetensors")
+    if src_model is None:
+        print("[state] no durable weights in state dataset; fresh start")
+        return None
+    if os.path.abspath(src_model) != os.path.abspath(dst_model):
+        if os.path.isdir(dst_model):
+            shutil.rmtree(dst_model)
+        shutil.copytree(src_model, dst_model)
+    # keep the processor alongside (same tokenizer/vocab) if we can find it
+    src_proc = _find_file(state_mount, "vocab.json") or _find_file(output_dir, "vocab.json")
+    if src_proc:
+        dst_proc = os.path.join(output_dir, STATE_PROCESSOR_DIR)
+        if not os.path.isdir(dst_proc):
+            shutil.copytree(src_proc, dst_proc)
+    print(f"[state] resumed weights from {dst_model} (src {src_model})")
+    return dst_model
+
+
+def _skip_training_args(ti):
+    return None if ti.name.endswith("training_args.bin") else ti
 
 
 def stage_for_push(output_dir: str, push_dir: str) -> str | None:
     """Pack the compact weight bundle (state/ + processor/) into a single
     top-level `state.tar` inside push_dir, ready for `kaggle datasets version`.
+    training_args.bin is pruned (irrelevant to weight-only resume).
     """
     src_model = os.path.join(output_dir, STATE_MODEL_DIR)
     if not os.path.isdir(src_model) or not os.listdir(src_model):
@@ -71,7 +94,7 @@ def stage_for_push(output_dir: str, push_dir: str) -> str | None:
     import tarfile
     bundle = os.path.join(push_dir, STATE_BUNDLE)
     with tarfile.open(bundle, "w") as tar:  # no compression: safetensors won't shrink
-        tar.add(src_model, arcname=STATE_MODEL_DIR)
+        tar.add(src_model, arcname=STATE_MODEL_DIR, filter=_skip_training_args)
         src_proc = os.path.join(output_dir, STATE_PROCESSOR_DIR)
         if os.path.isdir(src_proc):
             tar.add(src_proc, arcname=STATE_PROCESSOR_DIR)
