@@ -116,11 +116,14 @@ def load_split_kaldi(split_dir: str) -> Dataset:
         text = normalize_amharic(raw)
         if not text:
             continue
-        rows.append({"id": utt, "audio": {"path": path}, "text": text})
+        rows.append({"id": utt, "audio": path, "text": text})
     if missing:
         print(f"[data] {split_dir}: dropped {missing} utts w/o resolvable audio")
     ds = Dataset.from_list(rows)
-    feats = Features({"id": Value("string"), "audio": Audio(sampling_rate=16000), "text": Value("string")})
+    # Store the resolved wav PATH as a string; the collator loads it with librosa.
+    # (datasets 5.x returns a lazy AudioDecoder object for the Audio feature, which
+    # is awkward to consume in a custom collator, so we decode explicitly.)
+    feats = Features({"id": Value("string"), "audio": Value("string"), "text": Value("string")})
     return ds.cast(features=feats)
 
 
@@ -177,10 +180,34 @@ class DataCollatorCTCWithPadding:
         import librosa
         return librosa.resample(array.astype("float32"), orig_sr=sr, target_sr=self.target_sr)
 
+    def _wave(self, item):
+        """Return a float32 mono waveform at target_sr from an audio cell.
+
+        Handles: a path string (kaldi loader), bytes, or a decoded HF dict.
+        """
+        import io
+
+        if isinstance(item, str):
+            import librosa
+            wav, _ = librosa.load(item, sr=self.target_sr, mono=True)
+            return wav
+        if isinstance(item, (bytes, bytearray)):
+            import librosa
+            wav, _ = librosa.load(io.BytesIO(item), sr=self.target_sr, mono=True)
+            return wav
+        # HF Audio decoded dict -> {array, sampling_rate}
+        arr = item["array"] if "array" in item else None
+        sr = int(item.get("sampling_rate", self.target_sr) or self.target_sr)
+        if arr is None and "path" in item:
+            import librosa
+            wav, _ = librosa.load(item["path"], sr=self.target_sr, mono=True)
+            return wav
+        return self._to_16k(arr, sr)
+
     def __call__(self, features: list[dict]) -> dict:
         import torch
 
-        waves = [self._to_16k(f["audio"]["array"], f["audio"].get("sampling_rate", self.target_sr)) for f in features]
+        waves = [self._wave(f["audio"]) for f in features]
         input_values = self.processor(
             waves, sampling_rate=self.target_sr, return_tensors="pt", padding=True
         ).input_values
