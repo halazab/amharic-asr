@@ -1,23 +1,21 @@
 # Kaggle kernel entrypoint for the XLS-R/CTC fine-tune path.
 # Runs ONE time-budgeted session, then pushes resumable state to the state dataset.
 #
-# Design notes (learned from the first ERROR run):
-#   * git clone MUST happen before we can read anything from the repo, so no
-#     pip install referencing repo paths before the clone.
+# Why this shape (learned from the first two ERROR runs):
+#   * Kaggle's internet allowlist covers PyPI + HuggingFace but NOT github.com,
+#     so `git clone` from GitHub fails with "Could not resolve host". We ship the
+#     training code as a *mounted Kaggle dataset* (xlsr_code.zip) instead, which
+#     needs no internet. Internet is still ON because XLS-R-300M weights come
+#     from the HF Hub (allowlisted).
 #   * Kaggle already ships torch/transformers/datasets/librosa/soundfile/
-#     accelerate/evaluate, so we do NOT force-reinstall pinned versions (that
-#     risks downgrading transformers and breaking Wav2Vec2). We install only
-#     packages that are genuinely missing, best-effort.
-#   * The session MUST have internet enabled (XLS-R weights come from HF Hub);
-#     `enable_internet: true` lives in kernel-metadata-xlsr.json.
+#     accelerate/evaluate, so we never force-reinstall pinned versions.
 import os
 import subprocess
 import sys
+import zipfile
 
-REPO_URL = os.environ.get("AMH_REPO_URL", "https://github.com/halazab/amharic-asr.git")
-BRANCH = os.environ.get("AMH_BRANCH", "feat/xlsr-finetune")
 WORK = "/kaggle/working"
-repo = os.path.join(WORK, "repo")
+CODE_ZIP = "/kaggle/input/amharic-xlsr-code/xlsr_code.zip"
 
 
 def _sh(*cmd, check=True):
@@ -25,22 +23,23 @@ def _sh(*cmd, check=True):
     return subprocess.run(list(cmd), check=check)
 
 
-# --- 1. fetch the training code ---
-if os.path.isdir(os.path.join(repo, ".git")):
-    _sh("git", "-C", repo, "fetch", "origin", BRANCH, check=False)
-    _sh("git", "-C", repo, "checkout", BRANCH, check=False)
-    _sh("git", "-C", repo, "reset", "--hard", f"origin/{BRANCH}", check=False)
-else:
-    _sh("git", "clone", "--depth", "1", "-b", BRANCH, REPO_URL, repo)
-sys.path.insert(0, repo)
+# --- 1. unpack the training package from the mounted code dataset ---
+extract = os.path.join(WORK, "src")
+os.makedirs(extract, exist_ok=True)
+with zipfile.ZipFile(CODE_ZIP) as z:
+    z.extractall(extract)
+pkg = os.path.join(extract, "xlsr_finetune")
+assert os.path.isdir(pkg), f"xlsr_finetune not found under {extract}"
+sys.path.insert(0, extract)
+print("[kaggle] code unpacked:", sorted(os.listdir(pkg)))
 
 # --- 2. install only genuinely-missing deps (never downgrade the base stack) ---
 _missing = []
-for mod, pkg in (("librosa", "librosa"), ("soundfile", "soundfile"), ("evaluate", "evaluate")):
+for mod, pkg_name in (("librosa", "librosa"), ("soundfile", "soundfile"), ("evaluate", "evaluate")):
     try:
         __import__(mod)
     except Exception:
-        _missing.append(pkg)
+        _missing.append(pkg_name)
 if _missing:
     _sh(sys.executable, "-m", "pip", "install", "-q", *_missing, check=False)
 

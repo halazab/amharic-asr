@@ -9,7 +9,8 @@
   "enable_internet": true,
   "dataset_sources": [
     "ashenafifasilkebede/amharic-speech-corpus",
-    "halaza/amharic-xlsr-state"
+    "halaza/amharic-xlsr-state",
+    "halaza/amharic-xlsr-code"
   ],
   "competition_sources": [],
   "kernel_sources": []
