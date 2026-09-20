@@ -67,19 +67,28 @@ def push_state(push_dir: str, state_slug: str, message: str, title: str = "Amhar
     if not push_dir or not os.path.isdir(push_dir) or not os.listdir(push_dir):
         print("[state] nothing to push")
         return False
-    meta = os.path.join(push_dir, ".kaggle", "dataset-metadata.json")
-    os.makedirs(os.path.dirname(meta), exist_ok=True)
-    if not os.path.exists(meta):
-        with open(meta, "w", encoding="utf-8") as f:
-            json.dump({"title": title, "id": state_slug, "isPrivate": True}, f)
+    body = {"title": title, "id": state_slug, "isPrivate": True}
+    # Kaggle's CLI looks for dataset-metadata.json in different places across
+    # versions; write it to BOTH the dir root and .kaggle/ so `version` never
+    # fails with "Metadata file not found".
+    for meta in (os.path.join(push_dir, "dataset-metadata.json"),
+                 os.path.join(push_dir, ".kaggle", "dataset-metadata.json")):
+        os.makedirs(os.path.dirname(meta), exist_ok=True)
+        if not os.path.exists(meta):
+            with open(meta, "w", encoding="utf-8") as f:
+                json.dump(body, f)
     cmd = ["kaggle", "datasets", "version", "-p", push_dir, "-q", "-m", message]
     print("[state] pushing:", " ".join(cmd))
     try:
-        subprocess.run(cmd, check=True)
+        r = subprocess.run(cmd, check=True, capture_output=True, text=True)
         print("[state] push OK")
+        if r.stdout:
+            print("[state] (kaggle stdout) " + r.stdout.strip()[:500])
         return True
     except FileNotFoundError:
         print("[state] kaggle CLI not found (expected on Kaggle)")
     except subprocess.CalledProcessError as e:
-        print(f"[state] push failed: {e}")
+        print(f"[state] push failed rc={e.returncode}")
+        print(f"[state] stderr: {(e.stderr or '').strip()[:800]}")
+        print(f"[state] stdout: {(e.stdout or '').strip()[:800]}")
     return False
