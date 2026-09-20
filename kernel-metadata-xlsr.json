@@ -8,6 +8,7 @@
   "enable_gpu": true,
   "enable_internet": true,
   "dataset_sources": [
+    "ashenafifasilkebede/amharic-speech-corpus",
     "halaza/amharic-xlsr-state"
   ],
   "competition_sources": [],

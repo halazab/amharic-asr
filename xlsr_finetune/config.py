@@ -22,13 +22,20 @@ WORK_DIR = _env("AMH_ASR_WORK", "/kaggle/working")
 STATE_SLUG = _env("AMH_STATE_SLUG", "halaza/amharic-xlsr-state")
 STATE_MOUNT = os.path.join(INPUT_DIR, "amharic-xlsr-state")
 
+# Kaggle-hosted Amharic corpus (public, mounts as a kernel input; no HF auth).
+CORPUS_MOUNT = os.path.join(INPUT_DIR, "amharic-speech-corpus", "AMHARIC", "data")
+
 OUTPUT_DIR = os.path.join(WORK_DIR, "xlsr_checkpoints")
 PUSH_DIR = os.path.join(WORK_DIR, "xlsr_state_push")
 
 
 @dataclass
 class Settings:
-    # --- data (same source as from-scratch pipeline) ---
+    # --- data source: "kaggle_kaldi" (default, remote-native) or "hf" ---
+    data_source: str = _env("AMH_DATA_SOURCE", "kaggle_kaldi")
+    kaldi_train_dir: str = os.path.join(CORPUS_MOUNT, "train")
+    kaldi_test_dir: str = os.path.join(CORPUS_MOUNT, "test")
+
     hf_dataset: str = field(default_factory=lambda: _env("AMH_HF_DATASET", "Harbidel/amharic-asr-merged"))
     text_columns: tuple = ("text", "transcription", "sentence", "target", "label")
     sampling_rate: int = 16000

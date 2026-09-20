@@ -6,12 +6,13 @@ Works with any HF audio dataset exposing an `audio` feature + a text column
 """
 from __future__ import annotations
 
+import glob
 import json
 import os
 import tempfile
 import unicodedata
 
-from datasets import load_dataset
+from datasets import Dataset, Features, Value, Audio, load_dataset
 from transformers import Wav2Vec2CTCTokenizer, Wav2Vec2FeatureExtractor, Wav2Vec2Processor
 
 PAD_TOKEN = "<pad>"
@@ -73,6 +74,61 @@ def load_merged(hf_dataset: str, text_columns: tuple):
     val = prep(val) if val is not None else train.shard(index=1, num_shards=10, contiguous=False)
     test = prep(test) if test is not None else None
     return train, val, test, text_col
+
+
+def _read_kaldi_table(path: str) -> dict:
+    table = {}
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            utt, _, rest = line.partition(" ")
+            table[utt.strip()] = rest.strip()
+    return table
+
+
+def _resolve_wav(scp_token: str, split_dir: str):
+    base = os.path.basename(scp_token)
+    if not base.endswith(".wav"):
+        base += ".wav"
+    for c in (os.path.join(split_dir, base), os.path.join(split_dir, "wav", base)):
+        if os.path.exists(c):
+            return c
+    hits = glob.glob(os.path.join(split_dir, "**", base), recursive=True)
+    return hits[0] if hits else None
+
+
+def load_split_kaldi(split_dir: str) -> Dataset:
+    """Kaldi wav.scp + text -> HF Dataset with an Audio(16k) feature."""
+    wavs = _read_kaldi_table(os.path.join(split_dir, "wav.scp"))
+    texts = _read_kaldi_table(os.path.join(split_dir, "text"))
+    rows, missing = [], 0
+    for utt, raw in texts.items():
+        tok = wavs.get(utt)
+        path = _resolve_wav(tok, split_dir) if tok else None
+        if path is None:
+            missing += 1
+            continue
+        text = normalize_amharic(raw)
+        if not text:
+            continue
+        rows.append({"id": utt, "audio": {"path": path}, "text": text})
+    if missing:
+        print(f"[data] {split_dir}: dropped {missing} utts w/o resolvable audio")
+    ds = Dataset.from_list(rows)
+    feats = Features({"id": Value("string"), "audio": Audio(sampling_rate=16000), "text": Value("string")})
+    return ds.cast(feats=feats)
+
+
+def load_datasets(settings):
+    """Dispatch to the configured source; returns (train, eval)."""
+    if settings.data_source == "kaggle_kaldi":
+        train = load_split_kaldi(settings.kaldi_train_dir)
+        test = load_split_kaldi(settings.kaldi_test_dir) if os.path.exists(
+            os.path.join(settings.kaldi_test_dir, "wav.scp")) else None
+        return train, (test if test is not None and len(test) else train.shard(index=1, num_shards=10, contiguous=False))
+    train, val, _test, _col = load_merged(settings.hf_dataset, settings.text_columns)
+    return train, val
 
 
 def build_vocab(train_texts: list[str]) -> dict[str, int]:

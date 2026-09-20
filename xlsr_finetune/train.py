@@ -16,7 +16,7 @@ from transformers import Trainer, TrainingArguments, Wav2Vec2ForCTC, TrainerCall
 
 from . import state as st
 from .config import Settings, get_settings
-from .data import DataCollatorCTCWithPadding, build_processor, build_vocab, load_merged
+from .data import DataCollatorCTCWithPadding, build_processor, build_vocab, load_datasets
 from .metrics import compute_metrics
 
 
@@ -53,9 +53,9 @@ def main(settings: Settings | None = None) -> None:
     history = load_history(settings.state_mount)
 
     # 2) data
-    print(f"[train] loading HF dataset: {settings.hf_dataset}")
-    train_ds, eval_ds, _test, text_col = load_merged(settings.hf_dataset, settings.text_columns)
-    print(f"[train] text_col={text_col} train={len(train_ds)} eval={len(eval_ds)}")
+    print(f"[train] data_source={settings.data_source}")
+    train_ds, eval_ds = load_datasets(settings)
+    print(f"[train] train={len(train_ds)} eval={len(eval_ds)}")
     if settings.max_train_samples:
         train_ds = train_ds.select(range(min(settings.max_train_samples, len(train_ds))))
     if settings.max_eval_samples:
