@@ -1,9 +1,10 @@
 """Fine-tune XLS-R (Wav2Vec2) + CTC on the merged Amharic dataset, resumable.
 
 Run: python -m xlsr_finetune.train
-Launch once per Kaggle session. Each launch resumes from the latest checkpoint
-(pulled from the durable state dataset), trains until the time budget, saves,
-records WER/CER, then pushes state back to Kaggle.
+Launch once per Kaggle session. Each launch pulls the compact weight bundle from
+the durable state dataset, continues training until the time budget, evaluates
+WER/CER, saves weights back, and pushes state to Kaggle. Weight-only resume (no
+optimizer) keeps the durable state small and uploads reliable.
 """
 from __future__ import annotations
 
@@ -48,8 +49,8 @@ def main(settings: Settings | None = None) -> None:
     settings = settings or get_settings()
     os.makedirs(settings.output_dir, exist_ok=True)
 
-    # 1) resume first (Trainer discovers checkpoints in output_dir)
-    start_step = st.pull_resume(settings.state_mount, settings.output_dir)
+    # 1) resume: pull previous compact weight bundle (state/) from durable dataset
+    resume_model_dir = st.pull_resume(settings.state_mount, settings.output_dir)
     history = load_history(settings.state_mount)
 
     # 2) data
@@ -70,10 +71,11 @@ def main(settings: Settings | None = None) -> None:
     os.makedirs(pdir, exist_ok=True)
     processor.save_pretrained(pdir)
 
-    # 4) model
-    print(f"[train] loading {settings.model_name} vocab_size={vocab_size}")
+    # 4) model (resume from durable weights if present, else base XLS-R)
+    load_from = resume_model_dir or settings.model_name
+    print(f"[train] loading {load_from} vocab_size={vocab_size}")
     model = Wav2Vec2ForCTC.from_pretrained(
-        settings.model_name, vocab_size=vocab_size, pad_token_id=0,
+        load_from, vocab_size=vocab_size, pad_token_id=0,
         ctc_loss_reduction="sum",
     )
     if settings.freeze_feature_encoder:
@@ -106,10 +108,9 @@ def main(settings: Settings | None = None) -> None:
         callbacks=[TimeBudgetCallback(settings.time_budget_sec)],
     )
 
-    # 6) train (resume if a checkpoint exists)
-    resume = start_step > 0 and st._latest_checkpoint(settings.output_dir) is not None
-    print(f"[train] resume={resume} start_step={start_step}")
-    trainer.train(resume_from_checkpoint=resume)
+    # 6) train (weight-only resume: fresh optimizer each session)
+    print(f"[train] resume_from={resume_model_dir or 'base model'}")
+    trainer.train()
 
     # 7) evaluate
     metrics = trainer.evaluate()
@@ -117,8 +118,8 @@ def main(settings: Settings | None = None) -> None:
     print(f"[train] step={step} WER={wer:.4f} CER={cer:.4f}")
     history.append({"step": step, "wer": wer, "cer": cer, "ts": int(time.time())})
 
-    # 8) save final + push state
-    trainer.save_model(os.path.join(settings.output_dir, "latest"))
+    # 8) save compact weights + push durable state
+    trainer.save_model(os.path.join(settings.output_dir, st.STATE_MODEL_DIR))
     st.stage_for_push(settings.output_dir, settings.push_dir)
     best = min((h["wer"] for h in history if h.get("wer") is not None), default=None)
     st.write_metrics(settings.push_dir, {"history": history, "best_wer": best, "model": settings.model_name})

@@ -2,8 +2,14 @@
 
 Kaggle kills GPU sessions at any time and the writable FS does not survive, so
 the durable resume point is a private Kaggle dataset (STATE_SLUG). Each session:
-  pull_resume() -> train until time budget -> stage_for_push() -> push_state().
-Losing a session costs at most `save_steps` of progress.
+  pull_resume() -> train until time budget -> save compact weights ->
+  stage_for_push() -> write_metrics() -> push_state().
+
+We persist a *compact, weight-only* bundle (`state/` = model weights + config +
+processor), NOT a full HF Trainer checkpoint (which carries optimizer.pt, ~3x
+the size and fragile to upload). Resume loads those weights fresh; for a CTC
+fine-tune climbing WER over many sessions this is exactly what we want, and it
+keeps the durable state small per your "small checkpoints" requirement.
 """
 from __future__ import annotations
 
@@ -12,48 +18,43 @@ import os
 import shutil
 import subprocess
 
-
-def _latest_checkpoint(root: str) -> str | None:
-    if not os.path.isdir(root):
-        return None
-    ckpts = [
-        os.path.join(root, d)
-        for d in os.listdir(root)
-        if os.path.isdir(os.path.join(root, d)) and d.startswith("checkpoint-")
-    ]
-    return max(ckpts, key=lambda p: int(p.rsplit("-", 1)[-1])) if ckpts else None
+STATE_MODEL_DIR = "state"        # weight-only model dir inside output/push
+STATE_PROCESSOR_DIR = "processor"
 
 
-def pull_resume(state_mount: str, output_dir: str) -> int:
-    """Copy newest checkpoint from mounted state dataset into output_dir.
-    Returns resumed global_step (0 if fresh).
+def pull_resume(state_mount: str, output_dir: str) -> str | None:
+    """Copy the durable weight bundle from the mounted state dataset into
+    output_dir. Returns the local model dir to load, or None for a fresh start.
     """
-    if not os.path.isdir(state_mount):
-        print(f"[state] no mounted state at {state_mount}; fresh start")
-        return 0
-    src = _latest_checkpoint(state_mount)
-    if src is None:
-        print("[state] state dataset empty; fresh start")
-        return 0
-    dst = os.path.join(output_dir, os.path.basename(src))
-    if not os.path.exists(dst):
-        shutil.copytree(src, dst)
-    step = int(src.rsplit("-", 1)[-1])
-    print(f"[state] resumed from {src} (step {step})")
-    return step
+    src_model = os.path.join(state_mount, STATE_MODEL_DIR)
+    if not os.path.isdir(src_model) or not os.listdir(src_model):
+        print("[state] no durable weights in state dataset; fresh start")
+        return None
+    dst_model = os.path.join(output_dir, STATE_MODEL_DIR)
+    if not os.path.exists(dst_model):
+        shutil.copytree(src_model, dst_model)
+    # bring the processor along too if present (keeps tokenizer/vocab identical)
+    src_proc = os.path.join(state_mount, STATE_PROCESSOR_DIR)
+    if os.path.isdir(src_proc):
+        dst_proc = os.path.join(output_dir, STATE_PROCESSOR_DIR)
+        if not os.path.exists(dst_proc):
+            shutil.copytree(src_proc, dst_proc)
+    print(f"[state] resumed weights from {src_model}")
+    return dst_model
 
 
 def stage_for_push(output_dir: str, push_dir: str) -> str | None:
-    ckpt = _latest_checkpoint(output_dir)
-    if ckpt is None:
-        if os.path.isdir(output_dir) and os.listdir(output_dir):
-            ckpt = output_dir
-        else:
-            return None
+    """Assemble the compact push bundle (weights + processor) from output_dir."""
+    src_model = os.path.join(output_dir, STATE_MODEL_DIR)
+    if not os.path.isdir(src_model) or not os.listdir(src_model):
+        return None
     if os.path.exists(push_dir):
         shutil.rmtree(push_dir)
-    shutil.copytree(ckpt, push_dir)
-    print(f"[state] staged {ckpt} -> {push_dir}")
+    shutil.copytree(src_model, os.path.join(push_dir, STATE_MODEL_DIR))
+    src_proc = os.path.join(output_dir, STATE_PROCESSOR_DIR)
+    if os.path.isdir(src_proc):
+        shutil.copytree(src_proc, os.path.join(push_dir, STATE_PROCESSOR_DIR))
+    print(f"[state] staged {src_model} -> {push_dir}")
     return push_dir
 
 
