@@ -18,43 +18,65 @@ import os
 import shutil
 import subprocess
 
-STATE_MODEL_DIR = "state"        # weight-only model dir inside output/push
+STATE_MODEL_DIR = "state"        # weight-only model dir inside output_dir
 STATE_PROCESSOR_DIR = "processor"
+STATE_BUNDLE = "state.tar"       # single top-level file holding both dirs
 
 
 def pull_resume(state_mount: str, output_dir: str) -> str | None:
-    """Copy the durable weight bundle from the mounted state dataset into
+    """Extract the durable weight bundle from the mounted state dataset into
     output_dir. Returns the local model dir to load, or None for a fresh start.
+
+    We ship the weights as ONE top-level tarball (`state.tar`) because the
+    in-kernel `kaggle` CLI silently drops *nested directories* on `datasets
+    version` while uploading top-level files fine — a single file is the only
+    reliable large-payload shape.
     """
-    src_model = os.path.join(state_mount, STATE_MODEL_DIR)
-    if not os.path.isdir(src_model) or not os.listdir(src_model):
+    bundle = os.path.join(state_mount, STATE_BUNDLE)
+    dst_model = os.path.join(output_dir, STATE_MODEL_DIR)
+    if os.path.isdir(bundle) or os.path.isdir(os.path.join(state_mount, STATE_MODEL_DIR)):
+        # legacy layout (dirs committed directly) — resume if weights present
+        src_model = os.path.join(state_mount, STATE_MODEL_DIR)
+        if os.path.isdir(src_model) and os.listdir(src_model) and not os.path.isdir(dst_model):
+            shutil.copytree(src_model, dst_model)
+    if not os.path.isfile(bundle):
         print("[state] no durable weights in state dataset; fresh start")
         return None
-    dst_model = os.path.join(output_dir, STATE_MODEL_DIR)
-    if not os.path.exists(dst_model):
-        shutil.copytree(src_model, dst_model)
-    # bring the processor along too if present (keeps tokenizer/vocab identical)
-    src_proc = os.path.join(state_mount, STATE_PROCESSOR_DIR)
-    if os.path.isdir(src_proc):
-        dst_proc = os.path.join(output_dir, STATE_PROCESSOR_DIR)
-        if not os.path.exists(dst_proc):
-            shutil.copytree(src_proc, dst_proc)
-    print(f"[state] resumed weights from {src_model}")
-    return dst_model
+    if not os.path.isdir(dst_model) or not os.listdir(dst_model):
+        os.makedirs(output_dir, exist_ok=True)
+        import tarfile
+        with tarfile.open(bundle, "r") as tar:
+            try:
+                tar.extractall(output_dir, filter="data")
+            except TypeError:  # older tarfile without filter kwarg
+                tar.extractall(output_dir)
+        print(f"[state] extracted {bundle} -> {output_dir}")
+    if os.path.isdir(dst_model) and os.listdir(dst_model):
+        print(f"[state] resumed weights from {dst_model}")
+        return dst_model
+    print("[state] bundle present but no model dir after extract; fresh start")
+    return None
 
 
 def stage_for_push(output_dir: str, push_dir: str) -> str | None:
-    """Assemble the compact push bundle (weights + processor) from output_dir."""
+    """Pack the compact weight bundle (state/ + processor/) into a single
+    top-level `state.tar` inside push_dir, ready for `kaggle datasets version`.
+    """
     src_model = os.path.join(output_dir, STATE_MODEL_DIR)
     if not os.path.isdir(src_model) or not os.listdir(src_model):
         return None
     if os.path.exists(push_dir):
         shutil.rmtree(push_dir)
-    shutil.copytree(src_model, os.path.join(push_dir, STATE_MODEL_DIR))
-    src_proc = os.path.join(output_dir, STATE_PROCESSOR_DIR)
-    if os.path.isdir(src_proc):
-        shutil.copytree(src_proc, os.path.join(push_dir, STATE_PROCESSOR_DIR))
-    print(f"[state] staged {src_model} -> {push_dir}")
+    os.makedirs(push_dir, exist_ok=True)
+    import tarfile
+    bundle = os.path.join(push_dir, STATE_BUNDLE)
+    with tarfile.open(bundle, "w") as tar:  # no compression: safetensors won't shrink
+        tar.add(src_model, arcname=STATE_MODEL_DIR)
+        src_proc = os.path.join(output_dir, STATE_PROCESSOR_DIR)
+        if os.path.isdir(src_proc):
+            tar.add(src_proc, arcname=STATE_PROCESSOR_DIR)
+    size_mb = os.path.getsize(bundle) / 1e6
+    print(f"[state] packed {src_model} -> {bundle} ({size_mb:.0f} MB)")
     return push_dir
 
 
@@ -79,6 +101,16 @@ def push_state(push_dir: str, state_slug: str, message: str, title: str = "Amhar
             with open(meta, "w", encoding="utf-8") as f:
                 json.dump(body, f)
     cmd = ["kaggle", "datasets", "version", "-p", push_dir, "-q", "-m", message]
+    files = []
+    for dirpath, _dirs, fs in os.walk(push_dir):
+        for fn in fs:
+            if fn == "dataset-metadata.json":
+                continue
+            p = os.path.join(dirpath, fn)
+            files.append((os.path.relpath(p, push_dir), os.path.getsize(p)))
+    print(f"[state] about to upload {len(files)} file(s):")
+    for rel, sz in files:
+        print(f"[state]   {rel}  ({sz/1e6:.1f} MB)")
     print("[state] pushing:", " ".join(cmd))
     try:
         r = subprocess.run(cmd, check=True, capture_output=True, text=True)
