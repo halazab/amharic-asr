@@ -1,6 +1,6 @@
 {
-  "id": "halaza/amharic-xlsr-train",
-  "title": "Amharic ASR - XLS-R Finetune",
+  "id": "halaza/amharic-asr-xls-r-finetune",
+  "title": "Amharic ASR Xls R Finetune",
   "code_file": "xlsr_finetune/kaggle_xlsr.py",
   "language": "python",
   "kernel_type": "script",
