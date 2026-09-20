@@ -18,12 +18,37 @@ def _env(name: str, default: str) -> str:
 INPUT_DIR = _env("AMH_ASR_INPUT", "/kaggle/input")
 WORK_DIR = _env("AMH_ASR_WORK", "/kaggle/working")
 
+
+def find_mount(name: str, default: str, max_depth: int = 6) -> str:
+    """Resolve a Kaggle-mounted dataset dir by *basename*, at any depth.
+
+    Kaggle mounts kernel dataset sources inconsistently across runs — sometimes
+    `/kaggle/input/<slug>`, sometimes `/kaggle/input/datasets/<owner>/<slug>` —
+    so we never hardcode the layout. We walk INPUT_DIR and return the first
+    directory whose basename matches `name`; `default` is used if not found
+    (e.g. local/dev runs without mounts).
+    """
+    want = name.lower()
+    for dirpath, dirnames, _files in os.walk(INPUT_DIR):
+        depth = dirpath[len(INPUT_DIR):].count(os.sep)
+        if depth >= max_depth:
+            dirnames[:] = []
+            continue
+        for d in dirnames:
+            if d.lower() == want:
+                return os.path.join(dirpath, d)
+    return default
+
+
 # Durable resume state = a private Kaggle dataset owned by the user.
 STATE_SLUG = _env("AMH_STATE_SLUG", "halaza/amharic-xlsr-state")
-STATE_MOUNT = os.path.join(INPUT_DIR, "amharic-xlsr-state")
+STATE_MOUNT = _env("AMH_STATE_MOUNT", find_mount(
+    "amharic-xlsr-state", os.path.join(INPUT_DIR, "amharic-xlsr-state")))
 
 # Kaggle-hosted Amharic corpus (public, mounts as a kernel input; no HF auth).
-CORPUS_MOUNT = os.path.join(INPUT_DIR, "amharic-speech-corpus", "AMHARIC", "data")
+CORPUS_DIR = _env("AMH_CORPUS_DIR", find_mount(
+    "amharic-speech-corpus", os.path.join(INPUT_DIR, "amharic-speech-corpus")))
+CORPUS_MOUNT = os.path.join(CORPUS_DIR, "AMHARIC", "data")
 
 OUTPUT_DIR = os.path.join(WORK_DIR, "xlsr_checkpoints")
 PUSH_DIR = os.path.join(WORK_DIR, "xlsr_state_push")

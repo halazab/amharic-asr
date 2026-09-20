@@ -43,20 +43,27 @@ os.environ["AMH_ASR_INPUT"] = "/kaggle/input"
 os.environ["AMH_ASR_WORK"] = WORK
 
 # --- 3. remote pre-flight probe: verify mounts + data shape (logged, never local) ---
-import glob  # noqa: E402
+import shutil  # noqa: E402
+from xlsr_finetune import config as C  # noqa: E402
+
 inp = "/kaggle/input"
 print("[preflight] /kaggle/input =", sorted(os.listdir(inp)))
-corpus = os.path.join(inp, "amharic-speech-corpus", "AMHARIC", "data")
+print("[preflight] resolved CORPUS_MOUNT =", C.CORPUS_MOUNT, "exists:", os.path.isdir(C.CORPUS_MOUNT))
+print("[preflight] resolved STATE_MOUNT =", C.STATE_MOUNT, "exists:", os.path.isdir(C.STATE_MOUNT))
 for split in ("train", "test"):
-    d = os.path.join(corpus, split)
-    wavs = glob.glob(os.path.join(d, "**", "*.wav"), recursive=True)
+    d = os.path.join(C.CORPUS_MOUNT, split)
+    wav_scp = os.path.join(d, "wav.scp")
     txt = os.path.join(d, "text")
     n_text = sum(1 for _ in open(txt, encoding="utf-8")) if os.path.exists(txt) else 0
-    first = open(txt, encoding="utf-8").readline().strip() if os.path.exists(txt) else ""
-    print(f"[preflight] {split}: {len(wavs)} wavs, {n_text} text lines, sample: {first[:80]!r}")
-if os.path.isdir(os.path.join(inp, "amharic-xlsr-state")):
-    print("[preflight] state mounted:", sorted(os.listdir(os.path.join(inp, "amharic-xlsr-state"))))
-print("[preflight] GPU:", subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True).stdout.strip())
+    first_t = open(txt, encoding="utf-8").readline().strip() if os.path.exists(txt) else ""
+    first_s = open(wav_scp, encoding="utf-8").readline().strip() if os.path.exists(wav_scp) else ""
+    print(f"[preflight] {split}: text_lines={n_text}")
+    print(f"[preflight]   text[0]={first_t[:90]!r}")
+    print(f"[preflight]   wav.scp[0]={first_s[:90]!r}")
+gpu = ""
+if shutil.which("nvidia-smi"):
+    gpu = subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True).stdout.strip()
+print("[preflight] GPU:", gpu)
 
 from xlsr_finetune.train import main  # noqa: E402
 
