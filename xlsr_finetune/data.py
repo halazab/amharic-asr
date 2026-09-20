@@ -82,8 +82,12 @@ def _read_kaldi_table(path: str) -> dict:
         for line in f:
             if not line.strip():
                 continue
-            utt, _, rest = line.partition(" ")
-            table[utt.strip()] = rest.strip()
+            # Kaldi tables are whitespace-separated (tab OR spaces); split on the
+            # first run of whitespace so wav.scp (TAB) and text (SPACE) both parse.
+            parts = line.split(None, 1)
+            utt = parts[0].strip()
+            rest = parts[1].strip() if len(parts) > 1 else ""
+            table[utt] = rest
     return table
 
 
@@ -117,7 +121,7 @@ def load_split_kaldi(split_dir: str) -> Dataset:
         print(f"[data] {split_dir}: dropped {missing} utts w/o resolvable audio")
     ds = Dataset.from_list(rows)
     feats = Features({"id": Value("string"), "audio": Audio(sampling_rate=16000), "text": Value("string")})
-    return ds.cast(feats=feats)
+    return ds.cast(features=feats)
 
 
 def load_datasets(settings):
