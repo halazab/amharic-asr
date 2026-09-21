@@ -66,12 +66,24 @@ def compute_metrics(processor):
         toks = tokenizer.convert_ids_to_tokens([i for i in ids if i >= 0])
         return _tokens_to_text([t for t in toks if t != pad_tok])
 
+    _seen = {"n": 0}
+
     def _metrics(eval_pred):
         import numpy as np
         logits, labels = eval_pred
         pred_ids = np.argmax(logits, axis=-1)
         preds = [_decode_pred(list(p)) for p in pred_ids]
         refs = [_decode_label([i for i in lab if i != -100]) for lab in labels]
+        if _seen["n"] == 0:
+            _seen["n"] = 1
+            import unicodedata
+            for k in range(min(3, len(refs))):
+                print(f"[decode] LOGIT_LEN={logits.shape[1]} pred_len={len(preds[k])} ref_len={len(refs[k])}")
+                print(f"[decode] REF: {refs[k][:100]!r}")
+                print(f"[decode] PRED:{preds[k][:100]!r}")
+            _nc = [int((pred_ids == 0).sum(1).mean()), int((pred_ids != 0).sum(1).mean()),
+                   logits.shape[1] * logits.shape[0]]
+            print(f"[decode] blank-id0 frac/frame={_nc[0]}/{logits.shape[1]} nonzero_mean={_nc[1]}")
         return {"wer": wer(refs, preds), "cer": cer(refs, preds)}
 
     return _metrics
