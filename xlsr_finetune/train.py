@@ -74,7 +74,7 @@ def main(settings: Settings | None = None) -> None:
     # 4) model (resume from durable weights if present, else base XLS-R)
     load_from = resume_model_dir or settings.model_name
     print(f"[train] loading {load_from} vocab_size={vocab_size}")
-    load_kwargs = dict(vocab_size=vocab_size, pad_token_id=0, ctc_loss_reduction="sum")
+    load_kwargs = dict(vocab_size=vocab_size, pad_token_id=0, ctc_loss_reduction="mean")
     if resume_model_dir:
         # this transformers build *raises* on a shape mismatch; a vocab change
         # (e.g. corpus grew, or a prior smoke used a tiny subset) must only
@@ -99,7 +99,9 @@ def main(settings: Settings | None = None) -> None:
         save_strategy="steps", save_steps=settings.save_steps,
         save_total_limit=settings.keep_last_n_checkpoints + 1,
         eval_strategy="steps", eval_steps=settings.eval_steps,
-        logging_steps=25, report_to=[], dataloader_num_workers=2,
+        logging_steps=25, report_to=[],
+        dataloader_num_workers=4, dataloader_persistent_workers=True,
+        dataloader_pin_memory=True, dataloader_prefetch_factor=4,
         gradient_checkpointing=True,
     )
 
