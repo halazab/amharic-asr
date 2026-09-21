@@ -84,6 +84,13 @@ def compute_metrics(processor):
             _nc = [int((pred_ids == 0).sum(1).mean()), int((pred_ids != 0).sum(1).mean()),
                    logits.shape[1] * logits.shape[0]]
             print(f"[decode] blank-id0 frac/frame={_nc[0]}/{logits.shape[1]} nonzero_mean={_nc[1]}")
+            from collections import Counter
+            nb = [int(x) for x in pred_ids[0] if int(x) != 0]
+            cnt = Counter(nb).most_common(10)
+            tok = [(i, tokenizer.convert_ids_to_tokens(i)) for i, _ in cnt]
+            print(f"[decode] sample0 nonblank_id_tokens={tok}")
+            lab0 = [int(i) for i in labels[0] if int(i) not in (-100, 0)]
+            print(f"[decode] sample0 label_ids[:20]={lab0[:20]} n={len(lab0)}")
         return {"wer": wer(refs, preds), "cer": cer(refs, preds)}
 
     return _metrics
