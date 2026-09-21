@@ -17,9 +17,12 @@ import sys
 WORK = "/kaggle/working"
 CODE_ROOT = "/kaggle/input/amharic-xlsr-code"
 
-# SMOKE: flip to a short, tiny run purely to validate the end-to-end save+push of
-# the ~1.2GB weight bundle to the state dataset. Set False for production.
+# SMOKE: tiny subset run that only checks the save+push plumbing. PROBE: a short
+# *full-data* run (budget + eval cut only) so vocab stays 226 and it truly resumes
+# the durable checkpoint — used to validate throughput + CTC stability cheaply.
+# Both False for production.
 SMOKE = False
+PROBE = False
 if SMOKE:
     os.environ["AMH_TIME_BUDGET"] = "150"
     os.environ["AMH_MAX_TRAIN"] = "64"
@@ -27,6 +30,9 @@ if SMOKE:
     os.environ["AMH_BS"] = "4"
     os.environ["AMH_GRAD_ACCUM"] = "1"
     os.environ["AMH_SAVE_STEPS"] = "1000"   # only the final save_model matters now
+if PROBE:
+    os.environ["AMH_TIME_BUDGET"] = "600"   # ~10 min
+    os.environ["AMH_MAX_EVAL"] = "100"      # keep full train data -> vocab 226
 
 
 def _sh(*cmd, check=True):
