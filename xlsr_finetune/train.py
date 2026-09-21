@@ -86,13 +86,18 @@ def main(settings: Settings | None = None) -> None:
     model.config.use_cache = False
 
     # 5) args
+    # Weight-only resume restarts the optimizer each session, so a *ratio*-based
+    # warmup (over 30 epochs) never completes within a ~60-step session and LR
+    # effectively stays ~0 -> no learning. Use constant LR with a small absolute
+    # warmup so every session trains at full LR almost immediately.
     training_args = TrainingArguments(
         output_dir=settings.output_dir,
         per_device_train_batch_size=settings.batch_size,
         gradient_accumulation_steps=settings.grad_accum,
         per_device_eval_batch_size=settings.batch_size,
         learning_rate=settings.learning_rate,
-        warmup_ratio=settings.warmup_ratio,
+        lr_scheduler_type="constant_with_warmup",
+        warmup_steps=settings.warmup_steps,
         num_train_epochs=settings.num_epochs,
         fp16=torch.cuda.is_available(),
         remove_unused_columns=False,
@@ -102,13 +107,14 @@ def main(settings: Settings | None = None) -> None:
         logging_steps=25, report_to=[],
         dataloader_num_workers=4, dataloader_persistent_workers=True,
         dataloader_pin_memory=True, dataloader_prefetch_factor=4,
+        dataloader_drop_last=True,
         gradient_checkpointing=True,
     )
 
     trainer = Trainer(
         model=model, args=training_args,
         train_dataset=train_ds, eval_dataset=eval_ds,
-        data_collator=DataCollatorCTCWithPadding(processor, settings.sampling_rate),
+        data_collator=DataCollatorCTCWithPadding(processor, settings.sampling_rate, settings.max_audio_sec),
         compute_metrics=compute_metrics(processor),
         callbacks=[TimeBudgetCallback(settings.time_budget_sec)],
     )

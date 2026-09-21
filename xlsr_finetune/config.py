@@ -75,7 +75,10 @@ class Settings:
     batch_size: int = int(_env("AMH_BS", "16"))
     grad_accum: int = int(_env("AMH_GRAD_ACCUM", "4"))
     learning_rate: float = float(_env("AMH_LR", "1e-4"))
-    warmup_ratio: float = 0.06
+    # absolute warmup so it completes within a short per-session budget (a ratio
+    # over 30 epochs never finishes in ~60 steps and keeps LR ~0 -> no learning)
+    warmup_steps: int = int(_env("AMH_WARMUP_STEPS", "30"))
+    max_audio_sec: float = float(_env("AMH_MAX_SEC", "20"))  # cap batch padding -> step speed
     num_epochs: int = int(_env("AMH_EPOCHS", "30"))
     freeze_feature_encoder: bool = _env("AMH_FREEZE_ENC", "1") == "1"
 

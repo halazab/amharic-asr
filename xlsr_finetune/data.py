@@ -170,9 +170,12 @@ def build_processor(vocab: dict[str, int]) -> Wav2Vec2Processor:
 class DataCollatorCTCWithPadding:
     """Resample to 16k if needed, extract features, pad waveforms + labels."""
 
-    def __init__(self, processor: Wav2Vec2Processor, target_sr: int = 16000):
+    def __init__(self, processor: Wav2Vec2Processor, target_sr: int = 16000, max_sec: float = 0.0):
         self.processor = processor
         self.target_sr = target_sr
+        # cap every clip to max_sec so a single long utterance can't inflate the
+        # whole batch's padded length (attention is O(L^2) -> big speed win).
+        self.max_samples = int(max_sec * target_sr) if max_sec and max_sec > 0 else 0
 
     def _to_16k(self, array, sr):
         if sr == self.target_sr:
@@ -208,6 +211,8 @@ class DataCollatorCTCWithPadding:
         import torch
 
         waves = [self._wave(f["audio"]) for f in features]
+        if self.max_samples:
+            waves = [w[: self.max_samples] for w in waves]
         input_values = self.processor(
             waves, sampling_rate=self.target_sr, return_tensors="pt", padding=True
         ).input_values
